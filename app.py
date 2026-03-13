@@ -4,82 +4,71 @@ import fundamentus
 import math
 
 # Configuração da Página
-st.set_page_config(page_title="Radar B3 - Graham & Deep Value", layout="wide")
+st.set_page_config(page_title="Radar B3 - Valor & Graham", layout="wide")
 
 @st.cache_data(ttl=3600)
-def load_and_process_data():
-    # 1. Coleta os dados brutos
+def load_data():
+    # Coleta bruta
     df = fundamentus.get_resultado()
-    
-    # 2. Transforma o índice (Ticker) em coluna e reseta tudo
     df = df.reset_index()
     
-    # 3. Força todos os nomes de colunas para minúsculas para evitar conflitos
+    # Padronização de colunas (Minúsculas para evitar erros de índice)
     df.columns = [str(col).lower() for col in df.columns]
     
-    # 4. Mapeamento de colunas com verificação de existência
-    # Se a coluna não existir, o sistema cria com valor zero para não quebrar
-    colunas_necessarias = ['papel', 'cotacao', 'pvp', 'dy', 'lpa', 'vpa']
-    for col in colunas_necessarias:
-        if col not in df.columns:
-            df[col] = 0.0
-            
-    # 5. Seleciona e renomeia para o padrão do projeto
-    df = df[colunas_necessarias].copy()
-    df.columns = ['Ticker', 'Preço', 'P/VP', 'DY', 'LPA', 'VPA']
+    # Mapeamento essencial
+    cols = {'papel': 'Ticker', 'cotacao': 'Preço', 'pvp': 'P/VP', 'dy': 'DY', 'lpa': 'LPA', 'vpa': 'VPA'}
+    df = df[list(cols.keys())].copy()
+    df.rename(columns=cols, inplace=True)
     
-    # 6. Cálculo do Preço Justo de Graham
-    def calcular_graham(row):
+    # Cálculo do Preço Justo de Graham (Apenas para empresas lucrativas)
+    def calculate_graham(row):
         try:
-            # Requisito Graham: Lucro e Patrimônio positivos
             if row['LPA'] > 0 and row['VPA'] > 0:
                 return math.sqrt(22.5 * row['LPA'] * row['VPA'])
-        except:
-            return 0
+        except: return 0
         return 0
 
-    df['Preço Justo (Graham)'] = df.apply(calcular_graham, axis=1)
+    df['Preço Justo (Graham)'] = df.apply(calculate_graham, axis=1)
     
-    # 7. Cálculo da Margem de Segurança
-    df['Margem de Segurança'] = df.apply(
-        lambda x: ((x['Preço Justo (Graham)'] - x['Preço']) / x['Preço Justo (Graham)'] * 100) 
-        if x['Preço Justo (Graham)'] > x['Preço'] else 0, axis=1
+    # Margem de Segurança (Se não houver Graham, fica como 'N/A')
+    df['Margem'] = df.apply(
+        lambda x: round(((x['Preço Justo (Graham)'] - x['Preço']) / x['Preço Justo (Graham)'] * 100), 2)
+        if x['Preço Justo (Graham)'] > 0 else None, axis=1
     )
     
-    # Ajuste do Dividend Yield para porcentagem
     df['DY'] = df['DY'] * 100
-    
     return df
 
-# --- UI INTERFACE ---
-st.title("🏛️ Radar B3: Inteligência de Valor")
-st.markdown("Critérios: Preço < R$ 20 | P/VP < 1 | Margem de Segurança > 0")
+# --- INTERFACE ---
+st.title("🏛️ Radar B3: Oportunidades de Valor")
+st.markdown("Filtros Base: Preço < R$ 20 e P/VP < 1.0")
 
 try:
-    with st.spinner('Sincronizando com a B3...'):
-        data = load_and_process_data()
+    with st.spinner('Escaneando mercado...'):
+        data = load_data()
 
-    # Aplicação dos Filtros de Deep Value
-    mask = (data['Preço'] < 20.00) & (data['P/VP'] < 1.0) & (data['P/VP'] > 0) & (data['Margem de Segurança'] > 0)
-    df_filtrado = data[mask].sort_values(by='Margem de Segurança', ascending=False)
+    # Filtro Original (Preço e P/VP) para garantir que as ações apareçam
+    mask = (data['Preço'] < 20.00) & (data['P/VP'] < 1.0) & (data['P/VP'] > 0)
+    df_result = data[mask].sort_values(by='P/VP')
 
-    if not df_filtrado.empty:
-        st.subheader(f"✅ {len(df_filtrado)} Oportunidades Encontradas")
-        st.dataframe(
-            df_filtrado,
-            column_config={
-                "Preço": st.column_config.NumberColumn(format="R$ %.2f"),
-                "P/VP": st.column_config.NumberColumn(format="%.2f"),
-                "DY": st.column_config.NumberColumn(format="%.2f%%"),
-                "Preço Justo (Graham)": st.column_config.NumberColumn(format="R$ %.2f"),
-                "Margem de Segurança": st.column_config.NumberColumn(format="%.2f%%")
-            },
-            hide_index=True, width='stretch'
-        )
-    else:
-        st.warning("Nenhuma ação atende a todos os critérios simultâneos neste momento.")
+    # Métricas de Resumo
+    col1, col2 = st.columns(2)
+    col1.metric("Ações Encontradas", len(df_result))
+    col2.metric("Com Margem Graham", len(df_result[df_result['Margem'] > 0]))
+
+    st.dataframe(
+        df_result,
+        column_config={
+            "Preço": st.column_config.NumberColumn(format="R$ %.2f"),
+            "P/VP": st.column_config.NumberColumn(format="%.2f"),
+            "DY": st.column_config.NumberColumn(format="%.2f%%"),
+            "Preço Justo (Graham)": st.column_config.NumberColumn(format="R$ %.2f"),
+            "Margem": st.column_config.NumberColumn(format="%.2f%%", label="Margem Graham")
+        },
+        hide_index=True, width='stretch'
+    )
 
 except Exception as e:
-    st.error(f"Erro de Processamento: {e}")
+    st.error(f"Erro: {e}")
 
-st.sidebar.caption("Versão do Motor: 2.0 (Resiliente)")
+st.sidebar.info("As ações sem 'Margem Graham' são empresas que atualmente operam com lucro negativo ou patrimônio ajustado.")
