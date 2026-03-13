@@ -4,87 +4,82 @@ import fundamentus
 import math
 
 # Configuração da Página
-st.set_page_config(page_title="Radar B3 - Inteligência Graham", layout="wide")
+st.set_page_config(page_title="Radar B3 - Graham & Deep Value", layout="wide")
 
 @st.cache_data(ttl=3600)
 def load_and_process_data():
-    # Coleta bruta de dados
-    df_raw = fundamentus.get_resultado()
-    df = df_raw.reset_index()
+    # 1. Coleta os dados brutos
+    df = fundamentus.get_resultado()
     
-    # Padronização: Convertendo todos os nomes de colunas para minúsculas
-    # Isso evita o erro de "not in index" se a API mudar entre maiúsculas/minúsculas
+    # 2. Transforma o índice (Ticker) em coluna e reseta tudo
+    df = df.reset_index()
+    
+    # 3. Força todos os nomes de colunas para minúsculas para evitar conflitos
     df.columns = [str(col).lower() for col in df.columns]
     
-    # Seleção segura das colunas necessárias
-    colunas_foco = {
-        'papel': 'Ticker',
-        'cotacao': 'Preço',
-        'pvp': 'P/VP',
-        'dy': 'DY',
-        'lpa': 'LPA',
-        'vpa': 'VPA'
-    }
+    # 4. Mapeamento de colunas com verificação de existência
+    # Se a coluna não existir, o sistema cria com valor zero para não quebrar
+    colunas_necessarias = ['papel', 'cotacao', 'pvp', 'dy', 'lpa', 'vpa']
+    for col in colunas_necessarias:
+        if col not in df.columns:
+            df[col] = 0.0
+            
+    # 5. Seleciona e renomeia para o padrão do projeto
+    df = df[colunas_necessarias].copy()
+    df.columns = ['Ticker', 'Preço', 'P/VP', 'DY', 'LPA', 'VPA']
     
-    # Filtramos apenas o que existe no DataFrame
-    df = df[list(colunas_foco.keys())]
-    df.rename(columns=colunas_foco, inplace=True)
-    
-    # Cálculo do Preço Justo de Graham: sqrt(22.5 * LPA * VPA)
+    # 6. Cálculo do Preço Justo de Graham
     def calcular_graham(row):
         try:
-            # Graham só se aplica a empresas com lucro e patrimônio positivos
+            # Requisito Graham: Lucro e Patrimônio positivos
             if row['LPA'] > 0 and row['VPA'] > 0:
-                val = 22.5 * row['LPA'] * row['VPA']
-                return math.sqrt(val)
+                return math.sqrt(22.5 * row['LPA'] * row['VPA'])
         except:
             return 0
         return 0
 
     df['Preço Justo (Graham)'] = df.apply(calcular_graham, axis=1)
     
-    # Cálculo da Margem de Segurança (%)
+    # 7. Cálculo da Margem de Segurança
     df['Margem de Segurança'] = df.apply(
         lambda x: ((x['Preço Justo (Graham)'] - x['Preço']) / x['Preço Justo (Graham)'] * 100) 
-        if x['Preço Justo (Graham)'] > 0 else -100, axis=1
+        if x['Preço Justo (Graham)'] > x['Preço'] else 0, axis=1
     )
     
-    # Ajuste do DY (API traz em decimal, ex: 0.10 para 10%)
+    # Ajuste do Dividend Yield para porcentagem
     df['DY'] = df['DY'] * 100
     
     return df
 
 # --- UI INTERFACE ---
-st.title("🏛️ Radar B3: Deep Value & Margem de Segurança")
-st.markdown("Estratégia: Preço < R$ 20 | P/VP < 1 | Margem de Segurança Graham > 0.")
+st.title("🏛️ Radar B3: Inteligência de Valor")
+st.markdown("Critérios: Preço < R$ 20 | P/VP < 1 | Margem de Segurança > 0")
 
 try:
-    with st.spinner('Acessando dados e calculando Preço Justo...'):
+    with st.spinner('Sincronizando com a B3...'):
         data = load_and_process_data()
 
-    # Filtros Rigorosos de Projeto
-    filtro = (data['Preço'] < 20.00) & (data['P/VP'] < 1.0) & (data['P/VP'] > 0) & (data['Margem de Segurança'] > 0)
-    df_final = data[filtro].sort_values(by='Margem de Segurança', ascending=False)
+    # Aplicação dos Filtros de Deep Value
+    mask = (data['Preço'] < 20.00) & (data['P/VP'] < 1.0) & (data['P/VP'] > 0) & (data['Margem de Segurança'] > 0)
+    df_filtrado = data[mask].sort_values(by='Margem de Segurança', ascending=False)
 
-    st.subheader(f"📊 {len(df_final)} Ativos com Desconto Patrimonial")
-    
-    # Exibição com largura otimizada
-    st.dataframe(
-        df_final,
-        column_config={
-            "Preço": st.column_config.NumberColumn(format="R$ %.2f"),
-            "P/VP": st.column_config.NumberColumn(format="%.2f"),
-            "DY": st.column_config.NumberColumn(format="%.2f%%"),
-            "Preço Justo (Graham)": st.column_config.NumberColumn(format="R$ %.2f"),
-            "Margem de Segurança": st.column_config.NumberColumn(format="%.2f%%")
-        },
-        hide_index=True, 
-        width='stretch'
-    )
+    if not df_filtrado.empty:
+        st.subheader(f"✅ {len(df_filtrado)} Oportunidades Encontradas")
+        st.dataframe(
+            df_filtrado,
+            column_config={
+                "Preço": st.column_config.NumberColumn(format="R$ %.2f"),
+                "P/VP": st.column_config.NumberColumn(format="%.2f"),
+                "DY": st.column_config.NumberColumn(format="%.2f%%"),
+                "Preço Justo (Graham)": st.column_config.NumberColumn(format="R$ %.2f"),
+                "Margem de Segurança": st.column_config.NumberColumn(format="%.2f%%")
+            },
+            hide_index=True, width='stretch'
+        )
+    else:
+        st.warning("Nenhuma ação atende a todos os critérios simultâneos neste momento.")
 
 except Exception as e:
-    st.error(f"Erro técnico detectado: {e}")
-    st.info("Dica: Verifique se a biblioteca 'fundamentus' está na versão 0.3.2 no seu requirements.txt.")
+    st.error(f"Erro de Processamento: {e}")
 
-st.sidebar.write("---")
-st.sidebar.caption("Fórmula de Graham: V.I. = √(22,5 * LPA * VPA)")
+st.sidebar.caption("Versão do Motor: 2.0 (Resiliente)")
